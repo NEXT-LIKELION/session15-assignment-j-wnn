@@ -1,16 +1,16 @@
 "use client"
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
-import { v4 as uuidv4 } from "uuid"
 import type { Task } from "@/types/index"
+import { taskService } from "@/lib/firebase"
 
 interface TodoContextValue {
   tasks: Task[]
   username: string
-  addTask: (taskData: Omit<Task, "id" | "createdAt">) => void
-  updateTask: (task: Task) => void
-  deleteTask: (id: string) => void
-  toggleComplete: (id: string) => void
+  addTask: (taskData: Omit<Task, "id" | "createdAt">) => Promise<void>
+  updateTask: (task: Task) => Promise<void>
+  deleteTask: (id: string) => Promise<void>
+  toggleComplete: (id: string) => Promise<void>
   setUsername: (name: string) => void
 }
 
@@ -21,19 +21,7 @@ interface TodoProviderProps {
 }
 
 export function TodoProvider({ children }: TodoProviderProps) {
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const savedTasks = localStorage.getItem("tasks")
-        return savedTasks ? JSON.parse(savedTasks) : []
-      } catch (error) {
-        console.error("Error loading tasks from localStorage:", error)
-        return []
-      }
-    }
-    return []
-  })
-
+  const [tasks, setTasks] = useState<Task[]>([])
   const [username, setUsername] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("username") || "User"
@@ -41,14 +29,16 @@ export function TodoProvider({ children }: TodoProviderProps) {
     return "User"
   })
 
-  // Save tasks to localStorage whenever they change
+  // Load tasks from Firebase for specific user
   useEffect(() => {
-    try {
-      localStorage.setItem("tasks", JSON.stringify(tasks))
-    } catch (error) {
-      console.error("Error saving tasks to localStorage:", error)
-    }
-  }, [tasks])
+    if (!username) return
+
+    const unsubscribe = taskService.subscribeToTasks(username, (loadedTasks) => {
+      setTasks(loadedTasks)
+    })
+
+    return () => unsubscribe()
+  }, [username])
 
   // Save username to localStorage whenever it changes
   useEffect(() => {
@@ -59,25 +49,43 @@ export function TodoProvider({ children }: TodoProviderProps) {
     }
   }, [username])
 
-  const addTask = (taskData: Omit<Task, "id" | "createdAt">) => {
-    const newTask: Task = {
-      ...taskData,
-      id: uuidv4(),
-      createdAt: new Date().toISOString(),
+  const addTask = async (taskData: Omit<Task, "id" | "createdAt">) => {
+    try {
+      await taskService.addTask(username, taskData)
+    } catch (error) {
+      console.error("Error adding task:", error)
+      throw error
     }
-    setTasks((prevTasks) => [...prevTasks, newTask])
   }
 
-  const updateTask = (updatedTask: Task) => {
-    setTasks((prevTasks) => prevTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)))
+  const updateTask = async (updatedTask: Task) => {
+    try {
+      await taskService.updateTask(username, updatedTask)
+    } catch (error) {
+      console.error("Error updating task:", error)
+      throw error
+    }
   }
 
-  const deleteTask = (id: string) => {
-    setTasks((prevTasks) => prevTasks.filter((task) => task.id !== id))
+  const deleteTask = async (id: string) => {
+    try {
+      await taskService.deleteTask(username, id)
+    } catch (error) {
+      console.error("Error deleting task:", error)
+      throw error
+    }
   }
 
-  const toggleComplete = (id: string) => {
-    setTasks((prevTasks) => prevTasks.map((task) => (task.id === id ? { ...task, completed: !task.completed } : task)))
+  const toggleComplete = async (id: string) => {
+    try {
+      const task = tasks.find(t => t.id === id)
+      if (!task) return
+
+      await taskService.toggleTaskCompletion(username, id, !task.completed)
+    } catch (error) {
+      console.error("Error toggling task completion:", error)
+      throw error
+    }
   }
 
   const contextValue: TodoContextValue = {
